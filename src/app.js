@@ -86,3 +86,4 @@ app.use((error, req, res, next) => {
 });
 
 export { app };
+export default app;
