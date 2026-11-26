@@ -5,12 +5,16 @@ import connectDB from "./db/index.js";
 
 const PORT = process.env.PORT || 8000;
 
-connectDB()
-    .then(() => {
-        app.listen(PORT, () => {
-            console.log(`Server running on port ${PORT}`);
+if (process.env.VERCEL !== "1") {
+    connectDB()
+        .then(() => {
+            app.listen(PORT, () => {
+                console.log(`Server running on port ${PORT}`);
+            });
+        })
+        .catch(() => {
+            process.exitCode = 1;
         });
-    })
-    .catch((error) => {
-        console.log("MongoDB connection failed:", error);
-    });
+}
+
+export default app;

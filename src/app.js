@@ -8,6 +8,7 @@ import likeRouter from "./routes/like.routes.js";
 import commentRouter from "./routes/comment.routes.js";
 import subscriptionRouter from "./routes/subscription.routes.js";
 import notificationRouter from "./routes/notification.routes.js";
+import connectDB from "./db/index.js";
 const app = express();
 const configuredOrigin = process.env.CORS_ORIGIN;
 
@@ -38,6 +39,15 @@ app.use(cors({
     },
     credentials: true
 }));
+
+app.use(async (req, res, next) => {
+    try {
+        await connectDB();
+        next();
+    } catch (error) {
+        next(error);
+    }
+});
 
 app.use(express.json({ limit: "16kb" }));
 app.use(express.urlencoded({ extended: true, limit: "16kb" }));
