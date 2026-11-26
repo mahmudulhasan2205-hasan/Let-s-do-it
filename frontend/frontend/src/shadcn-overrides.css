@@ -1,0 +1,4 @@
+button[data-slot="button"] {
+  color: revert-layer;
+  border: revert-layer;
+}

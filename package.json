@@ -1,0 +1,33 @@
+{
+  "name": "public",
+  "version": "1.0.0",
+  "description": "My name is Mahin",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "dev": "nodemon -r dotenv/config src/index.js",
+    "test": "node --test"
+  },
+  "keywords": [
+    "Javascript",
+    "backend"
+  ],
+  "author": "mahin",
+  "license": "ISC",
+  "devDependencies": {
+    "nodemon": "3.1.14",
+    "prettier": "^3.9.10"
+  },
+  "dependencies": {
+    "bcrypt": "^6.0.0",
+    "cloudinary": "^2.11.0",
+    "cookie-parser": "^1.4.7",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.10",
+    "express": "^5.3.0",
+    "jsonwebtoken": "^9.0.3",
+    "mongoose": "^9.12.1",
+    "mongoose-aggregate-paginate-v2": "^1.1.5",
+    "multer": "^2.5.0"
+  }
+}
