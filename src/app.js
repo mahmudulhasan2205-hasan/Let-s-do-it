@@ -8,6 +8,7 @@ import likeRouter from "./routes/like.routes.js";
 import commentRouter from "./routes/comment.routes.js";
 import subscriptionRouter from "./routes/subscription.routes.js";
 import notificationRouter from "./routes/notification.routes.js";
+import reportRouter from "./routes/report.routes.js";
 import connectDB from "./db/index.js";
 const app = express();
 const configuredOrigin = process.env.CORS_ORIGIN;
@@ -60,6 +61,7 @@ app.use("/api/v1/likes", likeRouter);
 app.use("/api/v1/comments", commentRouter);
 app.use("/api/v1/subscriptions", subscriptionRouter);
 app.use("/api/v1/notifications", notificationRouter);
+app.use("/api/v1/reports", reportRouter);
 // Routes
 import userRouter from "./routes/user.routes.js";
 
@@ -74,7 +76,7 @@ app.use((error, req, res, next) => {
             : 500;
 
     if (statusCode >= 500) {
-        console.error("Request failed:", error.message);
+        console.error("Request failed:", error.stack || error.message);
     }
 
     res.status(statusCode).json({

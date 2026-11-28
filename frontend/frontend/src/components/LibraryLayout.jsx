@@ -82,7 +82,9 @@ export default function LibraryLayout() {
   const { data: currentUser } = useGetCurrentUserQuery();
   const [logoutUser, { isLoading: isLoggingOut }] = useLogoutUserMutation();
   const user = currentUser || storedUser;
-  const { data: notificationData } = useGetNotificationsQuery();
+  const { data: notificationData } = useGetNotificationsQuery(undefined, {
+    pollingInterval: 30_000,
+  });
   const currentLabel = navigation.find(({ to }) =>
     to === "/" ? location.pathname === "/" : location.pathname.startsWith(to),
   )?.label;

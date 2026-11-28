@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useSelector } from "react-redux";
 import {
@@ -7,6 +7,7 @@ import {
   BellPlus,
   Check,
   Eye,
+  Flag,
   Heart,
   LoaderCircle,
   MessageCircle,
@@ -38,8 +39,11 @@ import {
   useToggleVideoDislikeMutation,
   useToggleVideoLikeMutation,
 } from "@/features/library/libraryApi";
+import { useCreateReportMutation } from "@/features/community/reportApi";
 import {
   useAddVideoCommentMutation,
+  useAddCommentReplyMutation,
+  useToggleCommentLikeMutation,
   useDeleteVideoCommentMutation,
   useGetVideoCommentsQuery,
   useUpdateVideoCommentMutation,
@@ -92,9 +96,25 @@ function WatchPage() {
   const [commentPage, setCommentPage] = useState(1);
   const [editingCommentId, setEditingCommentId] = useState("");
   const [editingText, setEditingText] = useState("");
+  const [replyingCommentId, setReplyingCommentId] = useState("");
+  const [replyText, setReplyText] = useState("");
   const [actionMessage, setActionMessage] = useState("");
   const [actionError, setActionError] = useState("");
+  const [shareStatus, setShareStatus] = useState(null);
+  const [reportTarget, setReportTarget] = useState(null);
+  const [reportReason, setReportReason] = useState("spam");
+  const [reportDetails, setReportDetails] = useState("");
+  const shareStatusTimer = useRef(null);
   const viewedVideoIds = useRef(new Set());
+
+  useEffect(() => {
+    setShareStatus(null);
+    if (shareStatusTimer.current) window.clearTimeout(shareStatusTimer.current);
+
+    return () => {
+      if (shareStatusTimer.current) window.clearTimeout(shareStatusTimer.current);
+    };
+  }, [videoId]);
   const {
     data: commentsData,
     isLoading: commentsLoading,
@@ -110,6 +130,9 @@ function WatchPage() {
     useAddVideoToPlaylistMutation();
   const [addComment, { isLoading: isAddingComment }] =
     useAddVideoCommentMutation();
+  const [addCommentReply, { isLoading: isAddingReply }] = useAddCommentReplyMutation();
+  const [toggleCommentLike] = useToggleCommentLikeMutation();
+  const [createReport, { isLoading: isSubmittingReport }] = useCreateReportMutation();
   const [updateComment, { isLoading: isUpdatingComment }] =
     useUpdateVideoCommentMutation();
   const [deleteComment] = useDeleteVideoCommentMutation();
@@ -196,11 +219,34 @@ function WatchPage() {
   const handleShare = async () => {
     setActionError("");
     setActionMessage("");
+    setShareStatus(null);
+    if (shareStatusTimer.current) window.clearTimeout(shareStatusTimer.current);
+
     try {
       await navigator.clipboard.writeText(window.location.href);
-      setActionMessage("Video link copied.");
+      setShareStatus({ type: "success", text: "Link copied" });
     } catch {
-      setActionError("Could not copy the link. Copy it from your browser’s address bar.");
+      setShareStatus({ type: "error", text: "Could not copy link" });
+    }
+
+    shareStatusTimer.current = window.setTimeout(() => setShareStatus(null), 3000);
+  };
+
+  const handleSubmitReport = async (event) => {
+    event.preventDefault();
+    setActionError("");
+    try {
+      await createReport({
+        targetType: reportTarget.targetType,
+        targetId: reportTarget.targetId,
+        reason: reportReason,
+        details: reportDetails,
+      }).unwrap();
+      setReportTarget(null);
+      setReportDetails("");
+      setActionMessage("Report submitted. A moderator will review it.");
+    } catch (requestError) {
+      setActionError(requestError.data?.message || "Could not submit the report.");
     }
   };
 
@@ -308,13 +354,34 @@ function WatchPage() {
                   <Link to="/login"><ThumbsDown />Dislike</Link>
                 </Button>
               )}
-              <Button
-                variant="outline"
-                onClick={handleShare}
-                className="border-white/10 bg-white/[0.03] text-zinc-200 hover:bg-white/[0.08]"
-              >
-                <Share2 />Share
-              </Button>
+              <div className="flex items-center gap-2">
+                {isAuthenticated && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Report video"
+                    onClick={() => setReportTarget({ targetType: "video", targetId: video._id })}
+                    className="text-zinc-500 hover:text-red-300"
+                  >
+                    <Flag />
+                  </Button>
+                )}
+                <Button
+                  variant="outline"
+                  onClick={handleShare}
+                  className="border-white/10 bg-white/[0.03] text-zinc-200 hover:bg-white/[0.08]"
+                >
+                  <Share2 />Share
+                </Button>
+                {shareStatus && (
+                  <span
+                    role="status"
+                    className={`whitespace-nowrap text-xs ${shareStatus.type === "success" ? "text-emerald-300" : "text-red-300"}`}
+                  >
+                    {shareStatus.text}
+                  </span>
+                )}
+              </div>
             </div>
           </section>
 
@@ -373,6 +440,47 @@ function WatchPage() {
             <RequestError error={error || currentUserError || likedVideosError || dislikedVideosError || subscriptionsError || playlistsError || viewError || historyError || likeError || dislikeError || subscriptionError || playlistError || { data: { message: actionError } }} />
           )}
           {actionMessage && <p role="status" className="text-sm text-emerald-300">{actionMessage}</p>}
+
+          {reportTarget && (
+            <Card className="border-red-400/15 bg-[#121216]">
+              <CardContent className="p-4 sm:p-5">
+                <form onSubmit={handleSubmitReport} className="space-y-3">
+                  <div>
+                    <p className="text-sm font-medium text-white">Report {reportTarget.targetType}</p>
+                    <p className="mt-1 text-xs text-zinc-500">The report will be reviewed by a moderator.</p>
+                  </div>
+                  <select
+                    aria-label="Report reason"
+                    value={reportReason}
+                    onChange={(event) => setReportReason(event.target.value)}
+                    className="h-10 w-full rounded-lg border border-white/10 bg-[#1a1a1f] px-3 text-sm text-zinc-200"
+                  >
+                    <option value="spam">Spam</option>
+                    <option value="harassment">Harassment</option>
+                    <option value="inappropriate">Inappropriate content</option>
+                    <option value="copyright">Copyright</option>
+                    <option value="misinformation">Misinformation</option>
+                    <option value="other">Other</option>
+                  </select>
+                  <textarea
+                    aria-label="Report details"
+                    value={reportDetails}
+                    onChange={(event) => setReportDetails(event.target.value.slice(0, 1000))}
+                    maxLength={1000}
+                    rows={3}
+                    placeholder="Optional details"
+                    className="w-full resize-y rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-red-400/40"
+                  />
+                  <div className="flex gap-2">
+                    <Button type="submit" disabled={isSubmittingReport} className="bg-red-600 text-white hover:bg-red-500">
+                      {isSubmittingReport ? <LoaderCircle className="animate-spin" /> : <Flag />}Submit report
+                    </Button>
+                    <Button type="button" variant="ghost" onClick={() => setReportTarget(null)}>Cancel</Button>
+                  </div>
+                </form>
+              </CardContent>
+            </Card>
+          )}
 
           <section className="space-y-4">
             <div className="flex items-center gap-2">
@@ -473,6 +581,109 @@ function WatchPage() {
                             </form>
                           ) : (
                             <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-300">{comment.content}</p>
+                          )}
+                          {!isEditing && (
+                            <div className="mt-2 flex flex-wrap items-center gap-1">
+                              {isAuthenticated ? (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className={comment.likedByViewer ? "text-rose-300 hover:text-rose-200" : "text-zinc-500 hover:text-white"}
+                                  onClick={() => toggleCommentLike(comment._id)}
+                                >
+                                  <Heart className={comment.likedByViewer ? "size-4 fill-current" : "size-4"} />
+                                  {Number(comment.likeCount || 0)}
+                                </Button>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 text-xs text-zinc-500"><Heart className="size-4" />{Number(comment.likeCount || 0)}</span>
+                              )}
+                              {isAuthenticated && (
+                                <>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-zinc-500 hover:text-red-300"
+                                  onClick={() => setReportTarget({ targetType: "comment", targetId: comment._id })}
+                                >
+                                  <Flag className="size-4" />Report
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="text-xs text-zinc-500 hover:text-white"
+                                  onClick={() => {
+                                    setReplyingCommentId(replyingCommentId === comment._id ? "" : comment._id);
+                                    setReplyText("");
+                                  }}
+                                >
+                                  <MessageCircle className="size-4" />Reply
+                                </Button>
+                                </>
+                              )}
+                            </div>
+                          )}
+                          {replyingCommentId === comment._id && (
+                            <form
+                              className="mt-3 space-y-2"
+                              onSubmit={async (event) => {
+                                event.preventDefault();
+                                setActionError("");
+                                try {
+                                  await addCommentReply({ commentId: comment._id, content: replyText.trim() }).unwrap();
+                                  setReplyingCommentId("");
+                                  setReplyText("");
+                                  setActionMessage("Your reply was posted.");
+                                } catch (requestError) {
+                                  setActionError(requestError.data?.message || "Could not post your reply.");
+                                }
+                              }}
+                            >
+                              <textarea
+                                aria-label={`Reply to ${comment.owner?.fullName || "comment"}`}
+                                value={replyText}
+                                onChange={(event) => setReplyText(event.target.value.slice(0, 2000))}
+                                maxLength={2000}
+                                rows={2}
+                                placeholder="Write a reply..."
+                                className="w-full resize-y rounded-lg border border-white/10 bg-black/20 p-3 text-sm text-white outline-none placeholder:text-zinc-600 focus:border-red-400/40"
+                              />
+                              <div className="flex gap-2">
+                                <Button type="submit" size="sm" disabled={isAddingReply || !replyText.trim()}>
+                                  {isAddingReply ? <LoaderCircle className="animate-spin" /> : <Check />}Reply
+                                </Button>
+                                <Button type="button" size="sm" variant="ghost" onClick={() => setReplyingCommentId("")}>Cancel</Button>
+                              </div>
+                            </form>
+                          )}
+                          {comment.replies?.length > 0 && (
+                            <div className="mt-3 space-y-2 border-l border-white/[0.08] pl-3">
+                              {comment.replies.map((reply) => (
+                                <div key={reply._id} className="rounded-lg bg-white/[0.025] p-3">
+                                  <div className="flex items-center gap-2">
+                                    <Avatar className="size-7 shrink-0">
+                                      <AvatarImage src={reply.owner?.avatar} alt={reply.owner?.fullName || "Viewer"} />
+                                      <AvatarFallback className="bg-zinc-800 text-xs text-zinc-200">{reply.owner?.fullName?.slice(0, 1) || "V"}</AvatarFallback>
+                                    </Avatar>
+                                    <div className="min-w-0">
+                                      <p className="truncate text-xs font-medium text-zinc-200">{reply.owner?.fullName || "Viewer"}</p>
+                                      <p className="text-[11px] text-zinc-600">@{reply.owner?.username || "viewer"}</p>
+                                    </div>
+                                  </div>
+                                  <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-zinc-300">{reply.content}</p>
+                                  {isAuthenticated && (
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className={reply.likedByViewer ? "mt-1 text-rose-300 hover:text-rose-200" : "mt-1 text-zinc-500 hover:text-white"}
+                                      onClick={() => toggleCommentLike(reply._id)}
+                                    >
+                                      <Heart className={reply.likedByViewer ? "size-4 fill-current" : "size-4"} />
+                                      {Number(reply.likeCount || 0)}
+                                    </Button>
+                                  )}
+                                </div>
+                              ))}
+                            </div>
                           )}
                           {isCommentOwner && !isEditing && (
                             <div className="mt-2 flex gap-2">

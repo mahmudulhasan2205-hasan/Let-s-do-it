@@ -6,7 +6,13 @@ import {uploadOnCloudinary} from "../utils/cloudinary.js";
 import {ApiResponse} from "../utils/Apiresponse.js";
 import jwt from "jsonwebtoken"
 import mongoose from "mongoose";
-import { createHash, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { LoginActivity } from "../models/loginActivity.model.js";
+import { Notification } from "../models/notification.model.js";
+import { generateSecret, generateURI, verifySync } from "otplib";
+import QRCode from "qrcode";
+import { sendEmail } from "../utils/email.js";
+import { Session } from "../models/session.model.js";
 
 const hashRefreshToken = (token) =>
     createHash("sha256").update(token).digest("hex");
@@ -135,13 +141,76 @@ if (!user) {
     throw new ApiError(404, "User not found")
 }
 
+if (user.suspended) {
+    throw new ApiError(403, "Your account has been suspended")
+}
+
 const isPasswordValid = await user.isPasswordCorrect(password)
 
 if (!isPasswordValid) {
     throw new ApiError(401, "Password is incorrect")
 }
 
+const userForTwoFactor = await User.findById(user._id).select("+twoFactorSecret twoFactorEnabled")
+const twoFactorCode = typeof req.body?.twoFactorCode === "string" ? req.body.twoFactorCode.trim() : ""
+
+if (userForTwoFactor.twoFactorEnabled) {
+    if (!twoFactorCode) {
+        throw new ApiError(401, "Two-factor code required", [{ code: "TWO_FACTOR_REQUIRED" }])
+    }
+    const twoFactorResult = verifySync({
+        secret: userForTwoFactor.twoFactorSecret,
+        token: twoFactorCode,
+        digits: 6,
+        period: 30,
+        epochTolerance: 30,
+    })
+    if (!twoFactorResult.valid) {
+        throw new ApiError(401, "Invalid two-factor code", [{ code: "INVALID_TWO_FACTOR_CODE" }])
+    }
+}
+
 const {accessToken, refreshToken} = await generateAccessTokenAndRefreshToken(user._id)
+
+const forwardedFor = req.header("x-forwarded-for")
+const ipAddress = forwardedFor?.split(",")[0]?.trim() || req.ip || "unknown"
+const userAgent = req.header("user-agent")?.slice(0, 500) || "unknown"
+
+await Session.create({
+    user: user._id,
+    refreshTokenHash: hashRefreshToken(refreshToken),
+    ipAddress,
+    userAgent,
+    lastSeenAt: new Date(),
+})
+
+const previousLogins = await LoginActivity.find({ user: user._id })
+    .sort({ createdAt: -1 })
+    .limit(20)
+    .select("ipAddress userAgent")
+    .lean()
+
+const trustedLogin = previousLogins.find((activity) =>
+    activity.ipAddress === ipAddress && activity.userAgent === userAgent
+)
+const suspicious = previousLogins.length > 0 && !trustedLogin
+
+const activity = await LoginActivity.create({
+    user: user._id,
+    ipAddress,
+    userAgent,
+    suspicious,
+})
+
+if (suspicious) {
+    await Notification.create({
+        recipient: user._id,
+        actor: user._id,
+        type: "suspicious_login",
+    })
+    activity.alertSent = true
+    await activity.save()
+}
 
 const loggedInUser = await User.findById(user._id).select("-password -refreshToken")
 
@@ -166,6 +235,14 @@ return res
 )
 
 const logoutUser = asyncHandler(async(req, res) => {
+
+const incomingRefreshToken = req.cookies?.refreshToken
+if (incomingRefreshToken) {
+    await Session.updateMany(
+        { user: req.user._id, refreshTokenHash: hashRefreshToken(incomingRefreshToken), revokedAt: null },
+        { $set: { revokedAt: new Date() } }
+    )
+}
 
 await User.findByIdAndUpdate(req.user._id,{
 
@@ -209,7 +286,17 @@ if (!user || !matchesRefreshToken(user.refreshToken, incomingRefreshToken)) {
     throw new ApiError(401, "Invalid or expired refresh token");
 }
 
+const incomingSession = await Session.findOne({
+    user: user._id,
+    refreshTokenHash: hashRefreshToken(incomingRefreshToken),
+    revokedAt: null,
+}).select("+refreshTokenHash")
+if (!incomingSession) throw new ApiError(401, "Session has been revoked")
+
 const { accessToken, refreshToken } = await generateAccessTokenAndRefreshToken(user._id);
+incomingSession.refreshTokenHash = hashRefreshToken(refreshToken)
+incomingSession.lastSeenAt = new Date()
+await incomingSession.save()
 return res
     .status(200)
     .cookie("refreshToken", refreshToken, refreshCookieOptions())
@@ -394,6 +481,216 @@ return res
 
 })
 
+const searchUsers = asyncHandler(async (req, res) => {
+    const search = req.query.q?.trim();
+    if (!search) {
+        return res.status(200).json(new ApiResponse(200, [], "Users fetched successfully"));
+    }
+
+    const escapedSearch = search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const users = await User.find({
+        $or: [
+            { username: { $regex: escapedSearch, $options: "i" } },
+            { fullName: { $regex: escapedSearch, $options: "i" } }
+        ]
+    })
+        .select("fullName username avatar coverImage")
+        .sort({ username: 1 })
+        .limit(8);
+
+    return res.status(200).json(new ApiResponse(200, users, "Users fetched successfully"));
+});
+
+const setupTwoFactor = asyncHandler(async (req, res) => {
+    const secret = generateSecret()
+    const otpauthUrl = generateURI({
+        issuer: "Lets-do-it",
+        label: req.user.email,
+        secret,
+        digits: 6,
+        period: 30,
+    })
+    const qrCodeDataUrl = await QRCode.toDataURL(otpauthUrl)
+
+    return res.status(200).json(new ApiResponse(200, {
+        secret,
+        qrCodeDataUrl,
+    }, "Two-factor setup created"))
+})
+
+const enableTwoFactor = asyncHandler(async (req, res) => {
+    const { secret, code } = req.body || {}
+    if (typeof secret !== "string" || typeof code !== "string") {
+        throw new ApiError(400, "Secret and two-factor code are required")
+    }
+
+    const twoFactorResult = verifySync({
+        secret: secret.trim(),
+        token: code.trim(),
+        digits: 6,
+        period: 30,
+        epochTolerance: 30,
+    })
+    if (!twoFactorResult.valid) {
+        throw new ApiError(400, "Invalid two-factor code")
+    }
+
+    await User.findByIdAndUpdate(req.user._id, {
+        $set: { twoFactorEnabled: true, twoFactorSecret: secret.trim() }
+    })
+
+    return res.status(200).json(new ApiResponse(200, { twoFactorEnabled: true }, "Two-factor authentication enabled"))
+})
+
+const disableTwoFactor = asyncHandler(async (req, res) => {
+    const { code } = req.body || {}
+    const user = await User.findById(req.user._id).select("+twoFactorSecret")
+    if (!user?.twoFactorEnabled) {
+        throw new ApiError(400, "Two-factor authentication is not enabled")
+    }
+
+    const twoFactorResult = typeof code === "string"
+        ? verifySync({ secret: user.twoFactorSecret, token: code.trim(), digits: 6, period: 30, epochTolerance: 30 })
+        : { valid: false }
+    if (!twoFactorResult.valid) {
+        throw new ApiError(400, "Invalid two-factor code")
+    }
+
+    await User.findByIdAndUpdate(req.user._id, {
+        $set: { twoFactorEnabled: false },
+        $unset: { twoFactorSecret: 1 }
+    })
+
+    return res.status(200).json(new ApiResponse(200, { twoFactorEnabled: false }, "Two-factor authentication disabled"))
+})
+
+const hashActionToken = (token) => createHash("sha256").update(token).digest("hex");
+
+const forgotPassword = asyncHandler(async (req, res) => {
+    const email = typeof req.body?.email === "string" ? req.body.email.trim().toLowerCase() : "";
+    if (!email) throw new ApiError(400, "Email is required");
+
+    const user = await User.findOne({ email }).select("+passwordResetTokenHash +passwordResetExpires");
+    if (user) {
+        const token = randomBytes(32).toString("hex");
+        user.passwordResetTokenHash = hashActionToken(token);
+        user.passwordResetExpires = new Date(Date.now() + 30 * 60 * 1000);
+        await user.save({ validateBeforeSave: false });
+
+        const appUrl = (process.env.APP_URL || "https://lets-do-it-web.vercel.app").replace(/\/$/, "");
+        await sendEmail({
+            to: user.email,
+            subject: "Reset your Lets-do-it password",
+            html: `<p>You requested a password reset.</p><p><a href="${appUrl}/reset-password/${token}">Reset your password</a></p><p>This link expires in 30 minutes.</p>`,
+        });
+    }
+
+    return res.status(200).json(new ApiResponse(200, {}, "If that account exists, a reset link has been sent"));
+});
+
+const resetPassword = asyncHandler(async (req, res) => {
+    const { token, password } = req.body || {};
+    if (typeof token !== "string" || typeof password !== "string") throw new ApiError(400, "Reset token and new password are required");
+    if (password.length < 8) throw new ApiError(400, "Password must be at least 8 characters");
+
+    const tokenHash = hashActionToken(token);
+    const user = await User.findOne({
+        passwordResetTokenHash: tokenHash,
+        passwordResetExpires: { $gt: new Date() },
+    }).select("+passwordResetTokenHash +passwordResetExpires");
+
+    if (!user) throw new ApiError(400, "Reset link is invalid or has expired");
+
+    user.password = password;
+    user.passwordResetTokenHash = undefined;
+    user.passwordResetExpires = undefined;
+    user.refreshToken = undefined;
+    await user.save();
+
+    return res.status(200).json(new ApiResponse(200, {}, "Password reset successfully"));
+});
+
+const requestEmailVerification = asyncHandler(async (req, res) => {
+    const user = await User.findById(req.user._id).select("+emailVerificationTokenHash +emailVerificationExpires");
+    if (user.emailVerified) return res.status(200).json(new ApiResponse(200, {}, "Email is already verified"));
+
+    const token = randomBytes(32).toString("hex");
+    user.emailVerificationTokenHash = hashActionToken(token);
+    user.emailVerificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000);
+    await user.save({ validateBeforeSave: false });
+
+    const appUrl = (process.env.APP_URL || "https://lets-do-it-web.vercel.app").replace(/\/$/, "");
+    await sendEmail({
+        to: user.email,
+        subject: "Verify your Lets-do-it email",
+        html: `<p>Verify your Lets-do-it email address.</p><p><a href="${appUrl}/verify-email/${token}">Verify email</a></p><p>This link expires in 24 hours.</p>`,
+    });
+
+    return res.status(200).json(new ApiResponse(200, {}, "Verification email sent"));
+});
+
+const verifyEmail = asyncHandler(async (req, res) => {
+    const token = typeof req.params?.token === "string" ? req.params.token : "";
+    if (!token) throw new ApiError(400, "Verification token is required");
+
+    const user = await User.findOne({
+        emailVerificationTokenHash: hashActionToken(token),
+        emailVerificationExpires: { $gt: new Date() },
+    }).select("+emailVerificationTokenHash +emailVerificationExpires");
+
+    if (!user) throw new ApiError(400, "Verification link is invalid or has expired");
+
+    user.emailVerified = true;
+    user.emailVerificationTokenHash = undefined;
+    user.emailVerificationExpires = undefined;
+    await user.save({ validateBeforeSave: false });
+
+    return res.status(200).json(new ApiResponse(200, { emailVerified: true }, "Email verified successfully"));
+});
+
+const getActiveSessions = asyncHandler(async (req, res) => {
+    const sessions = await Session.find({ user: req.user._id, revokedAt: null })
+        .sort({ lastSeenAt: -1 })
+        .limit(20)
+        .select("_id ipAddress userAgent lastSeenAt createdAt")
+    return res.status(200).json(new ApiResponse(200, sessions, "Active sessions fetched successfully"))
+})
+
+const revokeSession = asyncHandler(async (req, res) => {
+    const { sessionId } = req.params
+    if (!mongoose.isValidObjectId(sessionId)) throw new ApiError(400, "Invalid session ID")
+
+    const session = await Session.findOneAndUpdate(
+        { _id: sessionId, user: req.user._id, revokedAt: null },
+        { $set: { revokedAt: new Date() } },
+        { new: true }
+    )
+    if (!session) throw new ApiError(404, "Session not found")
+
+    return res.status(200).json(new ApiResponse(200, {}, "Session revoked successfully"))
+})
+
+const revokeAllSessions = asyncHandler(async (req, res) => {
+    await Session.updateMany(
+        { user: req.user._id, revokedAt: null },
+        { $set: { revokedAt: new Date() } }
+    )
+    await User.findByIdAndUpdate(req.user._id, { $unset: { refreshToken: 1 } })
+
+    return res.status(200).json(new ApiResponse(200, {}, "All sessions revoked successfully"))
+})
+
+const getLoginActivity = asyncHandler(async (req, res) => {
+    const activities = await LoginActivity.find({ user: req.user._id })
+        .sort({ createdAt: -1 })
+        .limit(20)
+        .lean()
+
+    return res.status(200).json(
+        new ApiResponse(200, activities, "Login activity fetched successfully")
+    )
+})
+
 const getWatchHistory = asyncHandler (async(req, res) => {
           const user = await User.aggregate([
             {
@@ -486,6 +783,18 @@ export {registerUser,
         updateUserAvatar,
         updateUserCoverImage,
         getUserChannelProfile,
+        searchUsers,
+        getLoginActivity,
+        getActiveSessions,
+        revokeSession,
+        revokeAllSessions,
+        setupTwoFactor,
+        enableTwoFactor,
+        disableTwoFactor,
+        forgotPassword,
+        resetPassword,
+        requestEmailVerification,
+        verifyEmail,
         getWatchHistory,
         addToWatchHistory
 

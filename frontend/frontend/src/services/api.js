@@ -62,6 +62,9 @@ export const api = createApi({
     "Viewers",
     "Channel",
     "Notification",
+    "Report",
+    "Session",
+    "Comment",
   ],
 
   endpoints: () => ({}),

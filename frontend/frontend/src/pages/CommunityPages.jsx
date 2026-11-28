@@ -20,6 +20,9 @@ const notificationCopy = {
   new_community_post: "shared a community update",
   video_comment: "commented on your video",
   video_like: "liked your video",
+  comment_reply: "replied to your comment",
+  comment_like: "liked your comment",
+  suspicious_login: "detected a login from a new device or location",
 };
 
 function RequestError({ error }) {
@@ -161,6 +164,9 @@ function NotificationsPage() {
   const actionError = markError || markAllError;
 
   const getDestination = (notification) => {
+    if (notification.type === "suspicious_login") {
+      return "/dashboard";
+    }
     if (notification.video?._id && notification.video.isPublished) {
       return `/watch/${notification.video._id}`;
     }

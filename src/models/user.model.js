@@ -43,6 +43,47 @@ const userSchema = new Schema({
     refreshToken: {
         type: String,
     },
+    role: {
+        type: String,
+        enum: ["user", "moderator", "admin"],
+        default: "user",
+        index: true,
+    },
+    suspended: {
+        type: Boolean,
+        default: false,
+        index: true,
+    },
+    twoFactorEnabled: {
+        type: Boolean,
+        default: false,
+        index: true,
+    },
+    twoFactorSecret: {
+        type: String,
+        select: false,
+    },
+    emailVerified: {
+        type: Boolean,
+        default: false,
+        index: true,
+    },
+    emailVerificationTokenHash: {
+        type: String,
+        select: false,
+    },
+    emailVerificationExpires: {
+        type: Date,
+        select: false,
+    },
+    passwordResetTokenHash: {
+        type: String,
+        select: false,
+    },
+    passwordResetExpires: {
+        type: Date,
+        select: false,
+    },
 }, { timestamps: true });
 
 userSchema.pre("save", async function () {

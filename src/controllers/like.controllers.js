@@ -36,7 +36,7 @@ const toggleVideoReaction = async (req, res, reaction) => {
     const existingReaction = await Like.findOne(filter);
     let result;
 
-    if (existingReaction?.reaction === reaction || (!existingReaction?.reaction && reaction === "like")) {
+    if (existingReaction && (existingReaction.reaction === reaction || (!existingReaction.reaction && reaction === "like"))) {
         await Like.deleteOne({ _id: existingReaction._id });
         result = { liked: false, disliked: false };
     } else if (existingReaction) {
@@ -73,7 +73,18 @@ const toggleVideoDislike = asyncHandler(async (req, res) => {
 });
 
 const toggleCommentLike = asyncHandler(async (req, res) => {
+    const comment = await Comment.findById(req.params.commentId).select("_id owner");
+    if (!comment) throw new ApiError(404, "Comment not found");
+
     const result = await toggleLike(Comment, "comment", req.params.commentId, req.user._id);
+    if (result.liked) {
+        await createNotification({
+            recipient: comment.owner,
+            actor: req.user._id,
+            type: "comment_like",
+            video: null
+        });
+    }
     return res.status(200).json(new ApiResponse(200, result, result.liked ? "Comment liked" : "Comment unliked"));
 });
 

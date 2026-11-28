@@ -12,6 +12,8 @@ function Login() {
     password: "",
   });
   const [loginUser, { isLoading, error }] = useLoginUserMutation();
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
 
   const handleChange = (event) => {
     setForm({
@@ -31,11 +33,16 @@ function Login() {
         email: isEmail ? identifier : "",
         username: isEmail ? "" : identifier,
         password: form.password,
+        ...(twoFactorRequired ? { twoFactorCode } : {}),
       }).unwrap();
 
       dispatch(setCredentials(data));
       navigate("/");
     } catch (submitError) {
+      const requiresCode = submitError?.data?.errors?.some((item) => item?.code === "TWO_FACTOR_REQUIRED");
+      if (requiresCode) {
+        setTwoFactorRequired(true);
+      }
       console.error("Login failed:", submitError);
     }
   };
@@ -75,18 +82,38 @@ function Login() {
             />
           </div>
 
+          {twoFactorRequired && (
+            <div>
+              <label className="block mb-2">Authenticator code</label>
+              <input
+                type="text"
+                name="twoFactorCode"
+                value={twoFactorCode}
+                onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                inputMode="numeric"
+                placeholder="000000"
+                required
+                className="w-full bg-[#292929] border border-gray-700 rounded-lg p-3 outline-none focus:border-red-500"
+              />
+            </div>
+          )}
+
           {error && (
             <p className="text-red-400 text-sm">
               {error?.data?.message || "Login failed. Please try again."}
             </p>
           )}
 
+          <Link to="/forgot-password" className="block text-right text-sm text-red-400 hover:text-red-300">
+            Forgot password?
+          </Link>
+
           <button
             type="submit"
             disabled={isLoading}
             className="w-full bg-red-600 hover:bg-red-700 disabled:opacity-50 rounded-lg py-3 font-semibold transition"
           >
-            {isLoading ? "Signing in..." : "Login"}
+            {isLoading ? "Signing in..." : twoFactorRequired ? "Verify and login" : "Login"}
           </button>
         </form>
 

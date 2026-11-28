@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useOutletContext, useParams } from "react-router-dom";
+import { Link, useNavigate, useOutletContext, useParams } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
 import {
   ArrowLeft,
   ArrowUpRight,
+  ShieldCheck,
   Clock3,
   Eye,
   Heart,
@@ -33,6 +34,14 @@ import { Skeleton } from "@/components/ui/skeleton";
 import {
   useGetChannelProfileQuery,
   useGetCurrentUserQuery,
+  useGetLoginActivityQuery,
+  useGetActiveSessionsQuery,
+  useRevokeSessionMutation,
+  useRevokeAllSessionsMutation,
+  useRequestEmailVerificationMutation,
+  useSetupTwoFactorMutation,
+  useEnableTwoFactorMutation,
+  useDisableTwoFactorMutation,
   useUpdateAccountMutation,
 } from "@/features/auth/authApi";
 import {
@@ -61,7 +70,12 @@ import {
   useGetChannelVideosQuery,
   useRecordVideoViewMutation,
 } from "@/features/video/videoApi";
-import { setUser } from "@/features/auth/authSlice";
+import { logout, setUser } from "@/features/auth/authSlice";
+import {
+  useGetReportsQuery,
+  useRemoveReportedContentMutation,
+  useResolveReportMutation,
+} from "@/features/community/reportApi";
 
 function PageHeading({ eyebrow, title, description, action }) {
   return (
@@ -697,6 +711,7 @@ function StatCard({ icon: Icon, label, value, to, accent }) {
 
 export function DashboardPage() {
   const dispatch = useDispatch();
+  const navigate = useNavigate();
   const { user: layoutUser } = useOutletContext();
   const { data: user } = useGetCurrentUserQuery();
   const profile = user || layoutUser;
@@ -708,6 +723,10 @@ export function DashboardPage() {
   const [editVideoDescription, setEditVideoDescription] = useState("");
   const [confirmingDeleteId, setConfirmingDeleteId] = useState("");
   const [videoActionMessage, setVideoActionMessage] = useState("");
+  const [twoFactorSetup, setTwoFactorSetup] = useState(null);
+  const [twoFactorCode, setTwoFactorCode] = useState("");
+  const [twoFactorMessage, setTwoFactorMessage] = useState("");
+  const [emailVerificationMessage, setEmailVerificationMessage] = useState("");
   const [videoActionError, setVideoActionError] = useState("");
   const { data: subscriptions = [], isLoading: subscriptionsLoading } = useGetSubscriptionsQuery(profile?._id, { skip: !profile?._id });
   const { data: likedVideos = [], isLoading: likedVideosLoading } = useGetLikedVideosQuery();
@@ -730,6 +749,20 @@ export function DashboardPage() {
   const [deleteVideo, { isLoading: isDeletingVideo }] = useDeleteVideoMutation();
   const [togglePublishStatus, { isLoading: isChangingPublishStatus }] =
     useToggleVideoPublishStatusMutation();
+  const [setupTwoFactor, { isLoading: isSettingUpTwoFactor }] = useSetupTwoFactorMutation();
+  const [enableTwoFactor, { isLoading: isEnablingTwoFactor }] = useEnableTwoFactorMutation();
+  const [disableTwoFactor, { isLoading: isDisablingTwoFactor }] = useDisableTwoFactorMutation();
+  const [requestEmailVerification, { isLoading: isRequestingEmailVerification }] = useRequestEmailVerificationMutation();
+  const { data: loginActivities = [], isLoading: loginActivityLoading } = useGetLoginActivityQuery();
+  const { data: activeSessions = [], isLoading: activeSessionsLoading } = useGetActiveSessionsQuery();
+  const [revokeSession] = useRevokeSessionMutation();
+  const [revokeAllSessions, { isLoading: isRevokingAllSessions }] = useRevokeAllSessionsMutation();
+  const isModerator = ["moderator", "admin"].includes(profile?.role);
+  const { data: pendingReports = [], isLoading: reportsLoading } = useGetReportsQuery("pending", {
+    skip: !isModerator,
+  });
+  const [resolveReport] = useResolveReportMutation();
+  const [removeReportedContent] = useRemoveReportedContentMutation();
 
   useEffect(() => {
     setFullName(profile?.fullName || "");
@@ -829,12 +862,254 @@ export function DashboardPage() {
         </CardContent>
       </Card>
 
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        {profile?.emailVerified ? (
+          <Badge variant="outline" className="border-emerald-400/20 bg-emerald-400/[0.06] text-emerald-200">Email verified</Badge>
+        ) : (
+          <>
+            <Badge variant="outline" className="border-amber-400/20 bg-amber-400/[0.06] text-amber-200">Email not verified</Badge>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={isRequestingEmailVerification}
+              onClick={async () => {
+                setEmailVerificationMessage("");
+                try {
+                  await requestEmailVerification().unwrap();
+                  setEmailVerificationMessage("Verification email sent.");
+                } catch (requestError) {
+                  setEmailVerificationMessage(requestError.data?.message || "Could not send verification email.");
+                }
+              }}
+              className="border-white/10 text-zinc-200"
+            >
+              {isRequestingEmailVerification ? <LoaderCircle className="animate-spin" /> : null}Send verification email
+            </Button>
+            {emailVerificationMessage && <span role="status" className="text-xs text-zinc-300">{emailVerificationMessage}</span>}
+          </>
+        )}
+      </div>
+
       <div className="mb-8 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard icon={Tv2} label="Subscriptions" value={subscriptionsLoading ? "—" : subscriptions.length} to="/subscriptions" accent="bg-blue-400/10 text-blue-300" />
         <StatCard icon={Heart} label="Liked videos" value={likedVideosLoading ? "—" : likedVideos.length} to="/liked" accent="bg-rose-400/10 text-rose-300" />
         <StatCard icon={ListVideo} label="Playlists" value={playlistsLoading ? "—" : playlists.length} to="/playlists" accent="bg-violet-400/10 text-violet-300" />
         <StatCard icon={Clock3} label="Watch history" value={historyLoading ? "—" : history.length} to="/history" accent="bg-amber-400/10 text-amber-200" />
       </div>
+
+      <Card className="mb-6 border-amber-400/15 bg-[#121216]">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg text-white">
+            <ShieldCheck className="size-5 text-amber-300" />Two-factor authentication
+          </CardTitle>
+          <CardDescription className="text-zinc-400">
+            {profile?.twoFactorEnabled ? "Your account requires an authenticator code when signing in." : "Add a second security step to your account."}
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          {twoFactorMessage && <p role="status" className="mb-4 text-sm text-emerald-300">{twoFactorMessage}</p>}
+          {profile?.twoFactorEnabled ? (
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="flex-1 text-sm text-zinc-300">
+                Authenticator code
+                <input
+                  value={twoFactorCode}
+                  onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                  inputMode="numeric"
+                  placeholder="000000"
+                  className="mt-2 h-10 w-full rounded-lg border border-white/10 bg-[#1a1a1f] px-3 text-sm text-white outline-none"
+                />
+              </label>
+              <Button
+                variant="outline"
+                disabled={isDisablingTwoFactor || twoFactorCode.length !== 6}
+                onClick={async () => {
+                  setTwoFactorMessage("");
+                  try {
+                    await disableTwoFactor({ code: twoFactorCode }).unwrap();
+                    setTwoFactorCode("");
+                    setTwoFactorMessage("Two-factor authentication disabled.");
+                  } catch (requestError) {
+                    setTwoFactorMessage(requestError.data?.message || "Could not disable two-factor authentication.");
+                  }
+                }}
+                className="border-red-400/20 text-red-200"
+              >
+                {isDisablingTwoFactor ? <LoaderCircle className="animate-spin" /> : null}Disable 2FA
+              </Button>
+            </div>
+          ) : twoFactorSetup ? (
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
+              <img src={twoFactorSetup.qrCodeDataUrl} alt="Authenticator QR code" className="size-44 rounded-xl bg-white p-2" />
+              <div className="min-w-0 flex-1">
+                <p className="text-xs text-zinc-500">Secret</p>
+                <code className="mt-1 block break-all rounded-lg border border-white/[0.07] bg-black/20 px-3 py-2 text-sm text-zinc-200">{twoFactorSetup.secret}</code>
+                <label className="mt-4 block text-sm text-zinc-300">
+                  Enter the six-digit code
+                  <input
+                    value={twoFactorCode}
+                    onChange={(event) => setTwoFactorCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
+                    inputMode="numeric"
+                    placeholder="000000"
+                    className="mt-2 h-10 w-full rounded-lg border border-white/10 bg-[#1a1a1f] px-3 text-sm text-white outline-none"
+                  />
+                </label>
+                <div className="mt-3 flex gap-2">
+                  <Button
+                    disabled={isEnablingTwoFactor || twoFactorCode.length !== 6}
+                    onClick={async () => {
+                      setTwoFactorMessage("");
+                      try {
+                        await enableTwoFactor({ secret: twoFactorSetup.secret, code: twoFactorCode }).unwrap();
+                        setTwoFactorSetup(null);
+                        setTwoFactorCode("");
+                        setTwoFactorMessage("Two-factor authentication enabled.");
+                      } catch (requestError) {
+                        setTwoFactorMessage(requestError.data?.message || "Could not enable two-factor authentication.");
+                      }
+                    }}
+                    className="bg-red-600 text-white hover:bg-red-500"
+                  >
+                    {isEnablingTwoFactor ? <LoaderCircle className="animate-spin" /> : null}Verify and enable
+                  </Button>
+                  <Button variant="ghost" onClick={() => setTwoFactorSetup(null)}>Cancel</Button>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <Button
+              disabled={isSettingUpTwoFactor}
+              onClick={async () => {
+                setTwoFactorMessage("");
+                try {
+                  setTwoFactorSetup(await setupTwoFactor().unwrap());
+                } catch (requestError) {
+                  setTwoFactorMessage(requestError.data?.message || "Could not create two-factor setup.");
+                }
+              }}
+              className="bg-red-600 text-white hover:bg-red-500"
+            >
+              {isSettingUpTwoFactor ? <LoaderCircle className="animate-spin" /> : null}Set up 2FA
+            </Button>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6 border-white/[0.07] bg-[#121216]">
+        <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <CardTitle className="flex items-center gap-2 text-lg text-white">
+              <ShieldCheck className="size-5 text-amber-300" />Active sessions
+            </CardTitle>
+            <CardDescription className="mt-2 text-zinc-400">Devices currently authorized to access your account.</CardDescription>
+          </div>
+          <Button
+            variant="outline"
+            disabled={isRevokingAllSessions || activeSessions.length === 0}
+            onClick={async () => {
+              try {
+                await revokeAllSessions().unwrap();
+                dispatch(logout());
+                navigate("/login");
+              } catch {
+                return;
+              }
+            }}
+            className="border-red-400/20 text-red-200"
+          >
+            {isRevokingAllSessions ? <LoaderCircle className="animate-spin" /> : null}Sign out all devices
+          </Button>
+        </CardHeader>
+        <CardContent>
+          {activeSessionsLoading ? (
+            <Skeleton className="h-20 rounded-xl bg-white/[0.05]" />
+          ) : activeSessions.length ? (
+            <div className="space-y-2">
+              {activeSessions.map((session) => (
+                <div key={session._id} className="flex flex-col gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm text-zinc-200">{session.ipAddress}</p>
+                    <p className="mt-1 truncate text-xs text-zinc-500">{session.userAgent}</p>
+                    <p className="mt-1 text-[11px] text-zinc-600">Last seen {new Date(session.lastSeenAt).toLocaleString()}</p>
+                  </div>
+                  <Button size="sm" variant="ghost" onClick={() => revokeSession(session._id)} className="shrink-0 text-zinc-400 hover:text-red-300">Sign out</Button>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-8 text-center text-sm text-zinc-500">No active sessions.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card className="mb-6 border-white/[0.07] bg-[#121216]">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2 text-lg text-white">
+            <ShieldCheck className="size-5 text-amber-300" />Recent login activity
+          </CardTitle>
+          <CardDescription className="text-zinc-400">Review devices and locations used to access your account.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {loginActivityLoading ? (
+            <Skeleton className="h-24 rounded-xl bg-white/[0.05]" />
+          ) : loginActivities.length ? (
+            <div className="space-y-2">
+              {loginActivities.slice(0, 10).map((activity) => (
+                <div key={activity._id} className="flex flex-col gap-2 rounded-xl border border-white/[0.07] bg-white/[0.02] p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="min-w-0">
+                    <p className="text-sm text-zinc-200">{activity.ipAddress}</p>
+                    <p className="mt-1 truncate text-xs text-zinc-500">{activity.userAgent}</p>
+                  </div>
+                  <div className="flex shrink-0 items-center gap-2">
+                    {activity.suspicious && <Badge variant="outline" className="border-amber-400/20 bg-amber-400/[0.06] text-amber-200">New device/IP</Badge>}
+                    <span className="text-xs text-zinc-500">{new Date(activity.createdAt).toLocaleString()}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-8 text-center text-sm text-zinc-500">No login activity recorded yet.</p>
+          )}
+        </CardContent>
+      </Card>
+
+      {isModerator && (
+        <Card className="mb-6 border-amber-400/15 bg-[#121216]">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-lg text-white">
+              <ShieldCheck className="size-5 text-amber-300" />Moderation queue
+              <Badge variant="outline" className="border-amber-400/20 bg-amber-400/[0.06] text-amber-200">
+                {reportsLoading ? "…" : pendingReports.length}
+              </Badge>
+            </CardTitle>
+            <CardDescription className="text-zinc-400">Pending reports from videos, comments, and users.</CardDescription>
+          </CardHeader>
+          <CardContent>
+            {reportsLoading ? (
+              <Skeleton className="h-24 rounded-xl bg-white/[0.05]" />
+            ) : pendingReports.length ? (
+              <div className="space-y-3">
+                {pendingReports.map((report) => (
+                  <div key={report._id} className="flex flex-col gap-3 rounded-xl border border-white/[0.07] bg-white/[0.02] p-4 sm:flex-row sm:items-center sm:justify-between">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-white">{report.targetType} report · {report.reason}</p>
+                      <p className="mt-1 truncate text-xs text-zinc-500">
+                        Reported by @{report.reporter?.username || "viewer"}{report.details ? ` · ${report.details}` : ""}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-2">
+                      <Button size="sm" variant="outline" onClick={() => resolveReport(report._id)} className="border-white/10 text-zinc-300">Resolve</Button>
+                      <Button size="sm" onClick={() => removeReportedContent(report._id)} className="bg-red-600 text-white hover:bg-red-500">Remove</Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="rounded-xl border border-white/[0.06] bg-white/[0.02] px-4 py-8 text-center text-sm text-zinc-500">No pending reports.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <Card className="mb-6 border-white/[0.07] bg-[#121216]">
         <CardHeader className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">

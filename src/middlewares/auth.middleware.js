@@ -33,6 +33,13 @@ export const verifyJWT = asyncHandler(async (req, res, next) => {
     next();
 });
 
+export const requireModerator = (req, res, next) => {
+    if (!["moderator", "admin"].includes(req.user?.role)) {
+        throw new ApiError(403, "Moderator access required");
+    }
+    next();
+};
+
 export const optionalVerifyJWT = asyncHandler(async (req, res, next) => {
     const token = req.header("Authorization")?.replace("Bearer ", "") ||
         req.cookies?.accessToken;

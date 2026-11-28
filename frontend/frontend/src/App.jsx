@@ -28,10 +28,14 @@ import { ThemeProvider, ThemeToggle } from "./components/ThemeProvider";
 import LocalGuideAssistant from "./components/LocalGuideAssistant";
 import Register from "./pages/Register";
 import Login from "./pages/Login";
+import ForgotPassword from "./pages/ForgotPassword";
+import ResetPassword from "./pages/ResetPassword";
+import VerifyEmail from "./pages/VerifyEmail";
 import Upload from "./pages/Upload";
 import ShortsPage from "./pages/ShortsPage";
 import { CommunityPage, NotificationsPage } from "./pages/CommunityPages";
 import WatchPage from "./pages/WatchPage";
+import { useGetNotificationsQuery } from "./features/community/communityApi";
 import {
   useGetRecommendedVideosQuery,
   useRecordVideoViewMutation,
@@ -39,6 +43,7 @@ import {
 import {
   useGetCurrentUserQuery,
   useLogoutUserMutation,
+  useSearchCreatorsQuery,
 } from "./features/auth/authApi";
 import { logout } from "./features/auth/authSlice";
 import {
@@ -127,6 +132,10 @@ function Home() {
   const { data: likedVideos = [] } = useGetLikedVideosQuery(undefined, {
     skip: !isAuthenticated,
   });
+  const { data: notificationData } = useGetNotificationsQuery(undefined, {
+    skip: !isAuthenticated,
+    pollingInterval: 30_000,
+  });
   const { data: subscriptions = [] } = useGetSubscriptionsQuery(viewer?._id, {
     skip: !isAuthenticated || !viewer?._id,
   });
@@ -139,10 +148,17 @@ function Home() {
   );
   const viewerId = viewer?._id ? String(viewer._id) : null;
   const viewerUsername = viewer?.username?.toLowerCase();
+  const { data: creatorResults = [] } = useSearchCreatorsQuery(search, {
+    skip: search.trim().length < 2,
+  });
   const visibleVideos = (data?.videos || []).filter((video) => {
     if (selectedCategory === "All") return true;
-    const searchable = `${video.title || ""} ${video.description || ""}`.toLowerCase();
+    const searchable = `${video.title || ""} ${video.description || ""} ${video.owner?.fullName || ""} ${video.owner?.username || ""}`.toLowerCase();
+    if (selectedCategory === "Trending") return Number(video.views || 0) >= 1;
     return searchable.includes(selectedCategory.toLowerCase());
+  }).sort((first, second) => {
+    if (selectedCategory !== "Trending") return 0;
+    return Number(second.views || 0) - Number(first.views || 0);
   });
 
   const handleLogout = async () => {
@@ -181,10 +197,43 @@ function Home() {
             onChange={(event) => setSearch(event.target.value)}
             className="h-11 w-full rounded-full border border-white/[0.09] bg-white/[0.04] pl-11 pr-4 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-red-400/40 focus:bg-white/[0.06]"
           />
+          {search.trim().length >= 2 && creatorResults.length > 0 && (
+            <div className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-xl border border-white/[0.08] bg-[#151518] p-1 shadow-2xl">
+              {creatorResults.map((creator) => (
+                <Link
+                  key={creator._id}
+                  to={`/channel/${encodeURIComponent(creator.username)}`}
+                  onClick={() => setSearch("")}
+                  className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-white/[0.06]"
+                >
+                  <Avatar className="size-8">
+                    <AvatarImage src={creator.avatar} alt={creator.fullName} />
+                    <AvatarFallback className="bg-zinc-800 text-xs text-zinc-200">{creator.fullName?.slice(0, 1) || "C"}</AvatarFallback>
+                  </Avatar>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-white">{creator.fullName}</span>
+                    <span className="block truncate text-xs text-zinc-500">@{creator.username}</span>
+                  </span>
+                </Link>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex shrink-0 items-center gap-2">
           {isAuthenticated ? (
             <>
+              <Link
+                to="/notifications"
+                aria-label={`${notificationData?.unreadCount || 0} unread notifications`}
+                className="relative grid size-10 place-items-center rounded-full text-zinc-400 transition hover:bg-white/[0.06] hover:text-white"
+              >
+                <Bell className="size-[18px]" />
+                {(notificationData?.unreadCount || 0) > 0 && (
+                  <span className="absolute right-0 top-0 grid min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white">
+                    {notificationData.unreadCount > 99 ? "99+" : notificationData.unreadCount}
+                  </span>
+                )}
+              </Link>
               <Link to="/dashboard" aria-label="Open your dashboard" className="hidden items-center gap-2 rounded-full p-1 pr-2 transition hover:bg-white/[0.06] sm:flex">
                 <Avatar className="size-8 border border-white/10">
                   <AvatarImage src={viewer?.avatar} alt={viewer?.fullName || "Your profile"} />
@@ -322,11 +371,32 @@ function Home() {
             <input
               type="search"
               aria-label="Search videos"
-              placeholder="Search videos..."
+              placeholder="Search videos and creators..."
               value={search}
               onChange={(event) => setSearch(event.target.value)}
               className="h-11 w-full rounded-full border border-white/[0.09] bg-white/[0.04] pl-11 pr-4 text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
             />
+            {search.trim().length >= 2 && creatorResults.length > 0 && (
+              <div className="absolute left-0 right-0 top-12 z-30 overflow-hidden rounded-xl border border-white/[0.08] bg-[#151518] p-1 shadow-2xl">
+                {creatorResults.map((creator) => (
+                  <Link
+                    key={creator._id}
+                    to={`/channel/${encodeURIComponent(creator.username)}`}
+                    onClick={() => setSearch("")}
+                    className="flex items-center gap-3 rounded-lg px-3 py-2.5 hover:bg-white/[0.06]"
+                  >
+                    <Avatar className="size-8">
+                      <AvatarImage src={creator.avatar} alt={creator.fullName} />
+                      <AvatarFallback className="bg-zinc-800 text-xs text-zinc-200">{creator.fullName?.slice(0, 1) || "C"}</AvatarFallback>
+                    </Avatar>
+                    <span className="min-w-0">
+                      <span className="block truncate text-sm font-medium text-white">{creator.fullName}</span>
+                      <span className="block truncate text-xs text-zinc-500">@{creator.username}</span>
+                    </span>
+                  </Link>
+                ))}
+              </div>
+            )}
           </div>
           <div className="mb-7">
             <p className="mb-2 text-[10px] font-semibold uppercase tracking-[0.22em] text-red-400">
@@ -575,6 +645,9 @@ function App() {
         <Route path="/" element={<Home />} />
         <Route path="/register" element={<Register />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
+        <Route path="/reset-password/:token" element={<ResetPassword />} />
+        <Route path="/verify-email/:token" element={<VerifyEmail />} />
         <Route path="/upload" element={<Upload />} />
         <Route path="/shorts" element={<ShortsPage />} />
         <Route path="/channel/:username" element={<ChannelProfilePage />} />

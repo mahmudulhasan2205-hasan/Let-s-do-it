@@ -22,6 +22,21 @@ export const commentApi = api.injectEndpoints({
         { type: "Comment", id: videoId },
       ],
     }),
+    addCommentReply: builder.mutation({
+      query: ({ commentId, content }) => ({
+        url: `/comments/c/${commentId}/replies`,
+        method: "POST",
+        body: { content },
+      }),
+      invalidatesTags: ["Comment"],
+    }),
+    toggleCommentLike: builder.mutation({
+      query: (commentId) => ({
+        url: `/likes/comments/${commentId}`,
+        method: "POST",
+      }),
+      invalidatesTags: ["Comment", "Like"],
+    }),
     updateVideoComment: builder.mutation({
       query: ({ commentId, content }) => ({
         url: `/comments/c/${commentId}`,
@@ -43,6 +58,8 @@ export const commentApi = api.injectEndpoints({
 export const {
   useGetVideoCommentsQuery,
   useAddVideoCommentMutation,
+  useAddCommentReplyMutation,
+  useToggleCommentLikeMutation,
   useUpdateVideoCommentMutation,
   useDeleteVideoCommentMutation,
 } = commentApi;

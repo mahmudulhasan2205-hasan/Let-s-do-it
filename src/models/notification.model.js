@@ -14,7 +14,7 @@ const notificationSchema = new Schema({
     },
     type: {
         type: String,
-        enum: ["new_video", "new_follower", "new_community_post", "video_comment", "video_like"],
+        enum: ["new_video", "new_follower", "new_community_post", "video_comment", "video_like", "comment_reply", "comment_like", "suspicious_login"],
         required: true,
     },
     video: {
